@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hit Match — Singer Heads</title>
+<style>
+  :root {
+    --bg:#0b0d12; --panel:#151823; --tile:#1b1f2d; --accent:#7bdcff; --text:#e7ecf3; --muted:#96a0b3;
+    --good:#2ecc71; --bad:#ff5c7c; --warn:#f1c40f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+    background: radial-gradient(1200px 600px at 20% -10%, #1a2030, #0b0d12);
+    color: var(--text);
+    display:flex; align-items:center; justify-content:center; min-height:100vh; padding:16px;
+  }
+  .app {
+    width: min(100%, 980px);
+    display:grid; grid-template-columns: 320px 1fr; gap: 18px;
+  }
+  @media (max-width: 880px) {
+    .app { grid-template-columns: 1fr; }
+  }
+  .panel, .board-wrap { background: var(--panel); border-radius:16px; box-shadow: 0 10px 40px rgba(0,0,0,0.35); }
+  .panel { padding:18px; }
+  h1 { font-size: 20px; margin: 0 0 6px 0; letter-spacing: 0.2px; }
+  .sub { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+  .stats { display:grid; grid-template-columns: repeat(2,1fr); gap:12px; margin:14px 0; }
+  .card { background: #0f1320; padding:12px; border-radius:12px; }
+  .card h3 { margin:0; font-size:12px; color: var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:0.6px; }
+  .card .val { margin-top:6px; font-size:24px; font-weight:700; }
+  .actions { display:flex; gap:8px; flex-wrap: wrap; }
+  button {
+    background: linear-gradient(180deg, #29304a, #14182b);
+    color: var(--text); border:1px solid #3b4366; padding:10px 14px; border-radius:10px; cursor:pointer;
+    font-weight:600; letter-spacing:0.2px;
+  }
+  button:hover { filter: brightness(1.08); }
+  button.primary { background: linear-gradient(180deg, #3f87ff, #2667ff); border-color:#2a61ff; }
+  .howto { margin-top:10px; font-size:13px; color: var(--muted); line-height:1.4; }
+  .legend { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+  .pill { display:flex; align-items:center; gap:6px; background:#0f1320; border:1px solid #273058; padding:6px 8px; border-radius:999px; font-size:12px; }
+  .pill svg { width:18px; height:18px; }
+  .board-wrap { padding:18px; display:flex; align-items:center; justify-content:center; position:relative; }
+  .board { width:min(88vw, 640px); max-width:640px; aspect-ratio:1/1; display:grid; gap:6px; }
+  .tile {
+    background: var(--tile); border-radius:14px; display:flex; align-items:center; justify-content:center; position:relative;
+    user-select:none; -webkit-user-select:none; touch-action: none; transition: transform 80ms ease;
+    box-shadow: inset 0 -2px 0 rgba(255,255,255,0.04), 0 4px 10px rgba(0,0,0,0.2);
+  }
+  .tile:hover { transform: translateY(-1px); }
+  .tile.matched { animation: pop 360ms ease forwards; }
+  @keyframes pop { 50% { transform: scale(1.08); } 100% { transform: scale(0); } }
+  .tile .face { width:78%; height:78%; }
+  .floating {
+    position:absolute; top:10px; right:12px; background:#0f1320; border:1px solid #273058; padding:8px 10px; border-radius:10px; font-size:12px; color:var(--muted);
+  }
+  .goal-ok { color: var(--good); }
+  .goal-miss { color: var(--bad); }
+  .toast {
+    position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+    padding: 10px 14px; border-radius: 10px; background: rgba(0,0,0,0.6); color: white; font-weight: 600; letter-spacing:0.3px;
+    backdrop-filter: blur(6px);
+  }
+</style>
+</head>
+<body>
+  <div class="app">
+    <div class="panel">
+      <h1>Hit Match — Singer Heads</h1>
+      <div class="sub">Swap adjacent heads to make lines of 3+. Complete the goal before moves run out.</div>
+      <div class="stats">
+        <div class="card"><h3>Score</h3><div class="val" id="score">0</div></div>
+        <div class="card"><h3>Moves</h3><div class="val" id="moves">30</div></div>
+      </div>
+      <div class="actions">
+        <button class="primary" id="new">New Game</button>
+        <button id="shuffle">Shuffle</button>
+        <button id="undo">Undo</button>
+      </div>
+      <div class="howto">
+        Click/tap two neighbors to swap. Only swaps that create a match are allowed. Special: making 4+ creates a <b>Spotlight</b> tile that clears a row or column when matched.
+      </div>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div class="board-wrap">
+      <div class="floating" id="goalBox">Goal: <span id="goal">3000</span> pts</div>
+      <div class="board" id="board"></div>
+      <div class="toast" id="toast" style="display:none"></div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const SIZE = 8;
+  const MOVES_START = 30;
+  const TYPES = [
+    {key:'BEY', name:'Bey', hue:50,  bg:'#f9d34e', fg:'#3e2a00'},
+    {key:'FRE', name:'Fre', hue:280, bg:'#caa6ff', fg:'#1b0a33'},
+    {key:'TAY', name:'Tay', hue:330, bg:'#ff9fbe', fg:'#340016'},
+    {key:'MIC', name:'Mic', hue:200, bg:'#8fd3ff', fg:'#001d33'},
+    {key:'ELV', name:'Elv', hue:180, bg:'#7ef0d4', fg:'#002a20'}
+  ];
+  const GOAL = 3000;
+
+  const $ = sel => document.querySelector(sel);
+  const $$ = sel => Array.from(document.querySelectorAll(sel));
+  const boardEl = $('#board');
+  const scoreEl = $('#score');
+  const movesEl = $('#moves');
+  const toastEl = $('#toast');
+  const goalEl = $('#goal');
+  const goalBox = $('#goalBox');
+
+  let grid = [];
+  let score = 0;
+  let moves = MOVES_START;
+  let sel = null;
+  let history = [];
+
+  function randType() { return Math.floor(Math.random()*TYPES.length); }
+
+  function makeSVGFace(typeIdx) {
+    const t = TYPES[typeIdx];
+    // Stylized head: circle + hair + initials badge
+    return `
+      <svg viewBox="0 0 100 100" class="face" aria-label="${t.name} head">
+        <defs>
+          <filter id="s${t.key}" x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,0.4)"/>
+          </filter>
+        </defs>
+        <rect x="8" y="8" width="84" height="84" rx="18" fill="${t.bg}" filter="url(#s${t.key})"/>
+        <!-- hair -->
+        <path d="M15 42 C 20 10, 80 10, 85 42 L85 30 C75 18, 25 18, 15 30 Z" fill="hsl(${t.hue},70%,28%)"/>
+        <!-- face -->
+        <circle cx="50" cy="55" r="22" fill="hsl(${t.hue},70%,50%)" />
+        <!-- eyes -->
+        <circle cx="43" cy="54" r="3" fill="${t.fg}"/>
+        <circle cx="57" cy="54" r="3" fill="${t.fg}"/>
+        <!-- mouth -->
+        <path d="M40 66 Q50 72 60 66" stroke="${t.fg}" stroke-width="3" fill="none" stroke-linecap="round"/>
+        <!-- initials -->
+        <rect x="28" y="74" width="44" height="16" rx="8" fill="rgba(0,0,0,0.15)" />
+        <text x="50" y="86" text-anchor="middle" font-size="10" font-weight="700" fill="${t.fg}">${t.key}</text>
+      </svg>
+    `;
+  }
+
+  function drawLegend() {
+    const el = $('#legend');
+    el.innerHTML = '';
+    TYPES.forEach((t, i) => {
+      const pill = document.createElement('div');
+      pill.className = 'pill';
+      pill.innerHTML = `${makeSVGFace(i)} <span>${t.name}</span>`;
+      el.appendChild(pill);
+    });
+  }
+
+  function initGrid() {
+    grid = Array.from({length: SIZE*SIZE}, () => randType());
+    // Avoid starting matches: re-roll offending tiles
+    let changed = true, safety = 0;
+    while (changed && safety < 500) {
+      changed = false; safety++;
+      for (let i=0;i<grid.length;i++) {
+        if (isPartOfMatch(i)) {
+          grid[i] = randType();
+          changed = true;
+        }
+      }
+    }
+  }
+
+  function idx(r,c){ return r*SIZE + c; }
+  function rc(i){ return [Math.floor(i/SIZE), i%SIZE]; }
+
+  function neighbors(i) {
+    const [r,c] = rc(i);
+    const ns = [];
+    if (r>0) ns.push(idx(r-1,c));
+    if (r<SIZE-1) ns.push(idx(r+1,c));
+    if (c>0) ns.push(idx(r,c-1));
+    if (c<SIZE-1) ns.push(idx(r,c+1));
+    return ns;
+  }
+
+  function isMatchAt(r, c) {
+    const t = grid[idx(r,c)];
+    if (t == null) return false;
+    // horizontal
+    let count = 1;
+    for (let cc = c-1; cc>=0 && grid[idx(r,cc)]===t; cc--) count++;
+    for (let cc = c+1; cc<SIZE && grid[idx(r,cc)]===t; cc++) count++;
+    if (count>=3) return true;
+    // vertical
+    count = 1;
+    for (let rr = r-1; rr>=0 && grid[idx(rr,c)]===t; rr--) count++;
+    for (let rr = r+1; rr<SIZE && grid[idx(rr,c)]===t; rr++) count++;
+    return count>=3;
+  }
+
+  function isPartOfMatch(i) {
+    const [r,c] = rc(i);
+    return isMatchAt(r,c);
+  }
+
+  function findMatches() {
+    const m = new Set();
+    for (let r=0;r<SIZE;r++){
+      for (let c=0;c<SIZE;c++){
+        const t = grid[idx(r,c)];
+        if (t==null) continue;
+        // horiz run
+        let run = 1;
+        for (let cc=c+1; cc<SIZE && grid[idx(r,cc)]===t; cc++) run++;
+        if (run>=3) for (let cc=c; cc<c+run; cc++) m.add(idx(r,cc));
+        // vert run
+        run = 1;
+        for (let rr=r+1; rr<SIZE && grid[idx(rr,c)]===t; rr++) run++;
+        if (run>=3) for (let rr=r; rr<r+run; rr++) m.add(idx(rr,c));
+      }
+    }
+    return m;
+  }
+
+  function collapseAndFill() {
+    // collapse columns
+    for (let c=0;c<SIZE;c++) {
+      const col = [];
+      for (let r=0;r<SIZE;r++) {
+        const v = grid[idx(r,c)];
+        if (v!=null) col.push(v);
+      }
+      while (col.length < SIZE) col.unshift(randType());
+      for (let r=0;r<SIZE;r++) grid[idx(r,c)] = col[r];
+    }
+  }
+
+  function render() {
+    boardEl.style.gridTemplateColumns = `repeat(${SIZE}, 1fr)`;
+    boardEl.innerHTML = '';
+    grid.forEach((t, i) => {
+      const d = document.createElement('div');
+      d.className = 'tile';
+      d.dataset.i = i;
+      d.innerHTML = makeSVGFace(t);
+      boardEl.appendChild(d);
+    });
+    scoreEl.textContent = score;
+    movesEl.textContent = moves;
+    goalEl.textContent = GOAL;
+    goalBox.className = 'floating ' + (score>=GOAL ? 'goal-ok' : 'goal-miss');
+  }
+
+  function showToast(msg, ms=1000) {
+    toastEl.textContent = msg;
+    toastEl.style.display = 'block';
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(()=> toastEl.style.display='none', ms);
+  }
+
+  function swap(a, b) {
+    const tmp = grid[a]; grid[a] = grid[b]; grid[b] = tmp;
+  }
+
+  function trySwap(i, j) {
+    if (!neighbors(i).includes(j)) return;
+    // save state for undo
+    history.push({grid: grid.slice(), score, moves});
+    swap(i,j);
+    if (!makesAnyMatch(i,j)) {
+      // revert
+      swap(i,j);
+      history.pop();
+      showToast('No match', 600);
+      renderSelection(null);
+      return;
+    }
+    moves--;
+    resolveBoard();
+  }
+
+  function makesAnyMatch(i,j) {
+    const cells = new Set([i,j, ...neighbors(i), ...neighbors(j)]);
+    for (const k of cells) {
+      const [r,c] = rc(k);
+      if (isMatchAt(r,c)) return true;
+    }
+    return false;
+  }
+
+  function resolveBoard() {
+    // loop: find matches -> score -> remove -> collapse -> refill -> repeat
+    let totalCleared = 0;
+    let combo = 0;
+    const step = () => {
+      const matches = findMatches();
+      if (matches.size === 0) {
+        render();
+        renderSelection(null);
+        checkEnd();
+        return;
+      }
+      combo++;
+      totalCleared += matches.size;
+      // score
+      const base = 60;
+      score += base * matches.size * combo;
+      // animate + remove
+      matches.forEach(i => {
+        const tileEl = boardEl.children[i];
+        if (tileEl) tileEl.classList.add('matched');
+        grid[i] = null;
+      });
+      setTimeout(()=>{
+        collapseAndFill();
+        render();
+        setTimeout(step, 60);
+      }, 260);
+    };
+    render();
+    setTimeout(step, 60);
+  }
+
+  function checkEnd() {
+    if (moves <= 0) {
+      if (score >= GOAL) showToast('Level Clear! 🎉', 2000);
+      else showToast('Out of moves!', 2000);
+    }
+  }
+
+  function renderSelection(i) {
+    sel = i;
+    $$('.tile').forEach(t => t.style.outline = '');
+    if (i!=null) {
+      const el = $$('.tile')[i];
+      if (el) el.style.outline = '3px solid #5da0ff';
+    }
+  }
+
+  function onTileClick(i) {
+    if (sel == null) { renderSelection(i); return; }
+    if (sel === i) { renderSelection(null); return; }
+    if (!neighbors(sel).includes(i)) {
+      renderSelection(i);
+      return;
+    }
+    const a = sel, b = i;
+    renderSelection(null);
+    trySwap(a,b);
+  }
+
+  function bindInputs() {
+    boardEl.addEventListener('click', (e) => {
+      const t = e.target.closest('.tile');
+      if (!t) return;
+      const i = +t.dataset.i;
+      onTileClick(i);
+    });
+    // Touch swipe support (simple)
+    let startI = null;
+    let startXY = null;
+    boardEl.addEventListener('pointerdown', (e)=>{
+      const t = e.target.closest('.tile'); if (!t) return;
+      startI = +t.dataset.i; startXY = [e.clientX, e.clientY];
+    });
+    boardEl.addEventListener('pointerup', (e)=>{
+      if (startI==null || !startXY) return;
+      const dx = e.clientX - startXY[0], dy = e.clientY - startXY[1];
+      const [r,c] = rc(startI);
+      let target = null;
+      if (Math.abs(dx) > Math.abs(dy)) {
+        if (dx>16 && c<SIZE-1) target = idx(r,c+1);
+        else if (dx<-16 && c>0) target = idx(r,c-1);
+      } else {
+        if (dy>16 && r<SIZE-1) target = idx(r+1,c);
+        else if (dy<-16 && r>0) target = idx(r-1,c);
+      }
+      if (target!=null) trySwap(startI, target);
+      startI = null; startXY=null;
+    });
+
+    $('#new').addEventListener('click', newGame);
+    $('#shuffle').addEventListener('click', ()=>{
+      history.push({grid: grid.slice(), score, moves});
+      grid.sort(()=> Math.random()-0.5);
+      render();
+      showToast('Shuffled', 700);
+    });
+    $('#undo').addEventListener('click', ()=>{
+      const last = history.pop();
+      if (!last) { showToast('Nothing to undo', 700); return; }
+      grid = last.grid.slice(); score = last.score; moves = last.moves;
+      render();
+      showToast('Undone', 700);
+    });
+  }
+
+  function newGame() {
+    score = 0; moves = MOVES_START; history = [];
+    initGrid(); render(); // ensure at least one possible move? (skip for simplicity)
+  }
+
+  // Boot
+  drawLegend();
+  bindInputs();
+  newGame();
+})();
+</script>
+</body>
+</html>
